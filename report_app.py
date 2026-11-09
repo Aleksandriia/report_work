@@ -1,10 +1,14 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 import calendar
 import os
 import re
+import matplotlib
+matplotlib.use('TkAgg')
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 DATA_FILE = "reports.json"
 TEMPLATES_FILE = "templates.json"
@@ -92,23 +96,90 @@ def build_comment_from_blocks(blocks, extra_text):
 
 # ─── Парсинг комментария в блоки ───
 def parse_comment_to_blocks(comment):
-    blocks = []
-    remaining = comment
-    for template in TEMPLATES:
-        pattern = re.escape(template)
-        match = re.search(pattern, remaining, re.IGNORECASE)
-        if match:
-            after = remaining[match.end():].strip(". ,")
-            tickets_match = re.search(r'[\d,\s]+', after)
-            tickets = ""
-            if tickets_match:
-                tickets = tickets_match.group().strip(", ")
-                after = after[tickets_match.end():].strip(". ,")
-            if template or tickets:
-                blocks.append((template, tickets))
-            remaining = after
-    extra = remaining.strip(". ,")
-    return blocks, extra
+    """
+    Умный парсер: разбивает по предложениям, ищет шаблоны,
+    объединяет одинаковые шаблоны, остаток идёт в доп. комментарий.
+    """
+    blocks = []  # список (template, tickets)
+    extra_parts = []  # текст без шаблона
+    
+    # Разбиваем по точкам
+    sentences = re.split(r'\.\s*', comment.strip())
+    
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        
+        # Вытаскиваем все числа 3+ цифр как тикеты
+        tickets_found = re.findall(r'\b(\d{3,})\b', sentence)
+        tickets_str = ", ".join(tickets_found) if tickets_found else ""
+        
+        # Убираем тикеты для поиска шаблона
+        sentence_clean = re.sub(r'\b\d{3,}\b', '', sentence).strip(" ,.-")
+        sentence_lower = sentence_clean.lower()
+        
+        if not sentence_clean:
+            # Только тикеты
+            if tickets_str:
+                blocks.append(("", tickets_str))
+            continue
+        
+        # Ищем наиболее похожий шаблон
+        best_template = None
+        best_score = 0.0
+        MATCH_THRESHOLD = 0.4  # Понизил порог для лучшего распознавания
+        
+        for template in TEMPLATES:
+            template_words = set(template.lower().split())
+            sentence_words = set(sentence_lower.split())
+            
+            if not template_words:
+                continue
+            
+            # Доля совпавших слов шаблона
+            common = template_words & sentence_words
+            score = len(common) / len(template_words)
+            
+            # Бонус за последовательные совпадения
+            template_list = template.lower().split()
+            for i in range(len(template_list)):
+                for length in range(min(4, len(template_list) - i), 1, -1):
+                    phrase = " ".join(template_list[i:i+length])
+                    if phrase in sentence_lower:
+                        score = max(score, length / len(template_list) + 0.15)
+            
+            if score > best_score:
+                best_score = score
+                best_template = template
+        
+        if best_score >= MATCH_THRESHOLD and best_template:
+            blocks.append((best_template, tickets_str))
+        else:
+            # Не нашли шаблон — в доп. комментарий
+            extra_parts.append(sentence)
+    
+    # Объединяем блоки с одинаковым шаблоном
+    merged_blocks = []
+    for template, tickets in blocks:
+        found = False
+        for i, (t, tk) in enumerate(merged_blocks):
+            if t == template:
+                # Объединяем тикеты
+                existing_tickets = [x.strip() for x in tk.split(",") if x.strip()] if tk else []
+                new_tickets = [x.strip() for x in tickets.split(",") if x.strip()] if tickets else []
+                all_tickets = list(dict.fromkeys(existing_tickets + new_tickets))  # убираем дубли
+                merged_blocks[i] = (t, ", ".join(all_tickets))
+                found = True
+                break
+        if not found:
+            merged_blocks.append((template, tickets))
+    
+    extra = ". ".join(extra_parts)
+    if extra and not extra.endswith("."):
+        extra += "."
+    
+    return merged_blocks, extra
 
 # ─── Нормализация времени для импорта ───
 def normalize_time(t):
@@ -649,6 +720,206 @@ class ImportWindow:
         ttk.Button(btn_frame, text="📂 Выбрать файл", command=choose_file).pack(side="left")
         ttk.Button(self.top, text="Отмена", command=self.top.destroy).pack(pady=10)
 
+# ─── Окно аналитики ───
+class AnalyticsWindow:
+    def __init__(self, parent):
+        self.top = tk.Toplevel(parent)
+        self.top.title("📊 Аналитика работы")
+        self.top.geometry("1100x750")
+        self.top.resizable(False, False)
+        self.top.configure(bg="#1e1e1e")
+        self.top.transient(parent)
+        
+        # Верхняя панель с фильтром
+        top_frame = ttk.Frame(self.top)
+        top_frame.pack(fill="x", padx=15, pady=10)
+        
+        ttk.Label(top_frame, text="Период:").pack(side="left", padx=(0, 5))
+        
+        self.combo_period = ttk.Combobox(top_frame, 
+            values=["Последние 7 дней", "Последние 30 дней", "Текущий месяц", "Всё время"],
+            state="readonly", width=20)
+        self.combo_period.pack(side="left", padx=5)
+        self.combo_period.set("Всё время")
+        self.combo_period.bind("<<ComboboxSelected>>", lambda e: self.draw())
+        
+        ttk.Button(top_frame, text="🔄 Обновить", command=self.draw).pack(side="left", padx=10)
+        
+        # Статистика сверху
+        stats_frame = ttk.Frame(self.top)
+        stats_frame.pack(fill="x", padx=15, pady=5)
+        
+        self.stat_labels = {}
+        for i, key in enumerate(["Всего часов", "Рабочих дней", "Среднее часов/день", 
+                                  "Создано тикетов", "Протестировано тикетов"]):
+            lbl = ttk.Label(stats_frame, text=f"{key}: 0", font=("Segoe UI", 10, "bold"))
+            lbl.pack(side="left", padx=15)
+            self.stat_labels[key] = lbl
+        
+        # Область для графиков
+        self.fig, self.axes = plt.subplots(2, 2, figsize=(12, 8))
+        self.fig.patch.set_facecolor('#1e1e1e')
+        for ax in self.axes.flat:
+            ax.set_facecolor('#2d2d2d')
+            ax.tick_params(colors='white')
+            ax.xaxis.label.set_color('white')
+            ax.yaxis.label.set_color('white')
+            ax.title.set_color('white')
+            for spine in ax.spines.values():
+                spine.set_color('#555555')
+        
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.top)
+        self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=15, pady=10)
+        
+        self.draw()
+    
+    def get_filtered_reports(self):
+        period = self.combo_period.get()
+        now = datetime.now()
+        
+        if period == "Последние 7 дней":
+            cutoff = (now - timedelta(days=7)).replace(hour=0, minute=0, second=0)
+        elif period == "Последние 30 дней":
+            cutoff = (now - timedelta(days=30)).replace(hour=0, minute=0, second=0)
+        elif period == "Текущий месяц":
+            cutoff = now.replace(day=1, hour=0, minute=0, second=0)
+        else:
+            cutoff = datetime(2000, 1, 1)
+        
+        filtered = []
+        for r in reports:
+            try:
+                d = datetime.strptime(r["date"], "%d.%m.%Y")
+                if d >= cutoff:
+                    filtered.append(r)
+            except:
+                pass
+        
+        return filtered
+    
+    def classify_block(self, template):
+        """Определяет тип блока: created, tested, other"""
+        t = template.lower()
+        if any(w in t for w in ["заведен", "создан", "найден критический"]):
+            return "created"
+        if any(w in t for w in ["протестирован", "тестирование", "проверк"]):
+            return "tested"
+        return "other"
+    
+    def draw(self):
+        filtered = self.get_filtered_reports()
+        
+        # Статистика
+        total_hours = sum(r.get("hours", 0) for r in filtered)
+        work_days = len(filtered)
+        avg_hours = round(total_hours / work_days, 1) if work_days else 0
+        
+        created_tickets = 0
+        tested_tickets = 0
+        for r in filtered:
+            blocks = r.get("blocks", [])
+            for template, tickets in blocks:
+                ticket_count = len([t.strip() for t in tickets.split(",") if t.strip()]) if tickets else 0
+                if self.classify_block(template) == "created":
+                    created_tickets += ticket_count
+                elif self.classify_block(template) == "tested":
+                    tested_tickets += ticket_count
+        
+        self.stat_labels["Всего часов"].config(text=f"Всего часов: {total_hours}")
+        self.stat_labels["Рабочих дней"].config(text=f"Рабочих дней: {work_days}")
+        self.stat_labels["Среднее часов/день"].config(text=f"Среднее: {avg_hours}ч")
+        self.stat_labels["Создано тикетов"].config(text=f"Создано: {created_tickets}")
+        self.stat_labels["Протестировано тикетов"].config(text=f"Протестировано: {tested_tickets}")
+        
+        # Очистка графиков
+        for ax in self.axes.flat:
+            ax.clear()
+        
+        if not filtered:
+            self.fig.suptitle("Нет данных", color='white', fontsize=14)
+            self.canvas.draw()
+            return
+        
+        # === График 1: Часы по дням ===
+        ax1 = self.axes[0, 0]
+        dates = []
+        hours_list = []
+        for r in sorted(filtered, key=lambda x: datetime.strptime(x["date"], "%d.%m.%Y")):
+            dates.append(r["date"][:5])  # ДД.ММ
+            hours_list.append(r.get("hours", 0))
+        
+        colors = ['#0078d4' if h >= 8 else '#ffaa00' if h >= 6 else '#ff4444' for h in hours_list]
+        ax1.bar(range(len(dates)), hours_list, color=colors, edgecolor='#555555')
+        ax1.set_xticks(range(len(dates)))
+        ax1.set_xticklabels(dates, rotation=45, ha='right', fontsize=8)
+        ax1.set_title("Часы по дням", fontsize=11)
+        ax1.set_ylabel("Часы")
+        ax1.axhline(y=8, color='#00ff88', linestyle='--', alpha=0.5, label='Норма 8ч')
+        ax1.legend()
+        
+        # === График 2: Тикеты по дням ===
+        ax2 = self.axes[0, 1]
+        dates2 = []
+        created_list = []
+        tested_list = []
+        for r in sorted(filtered, key=lambda x: datetime.strptime(x["date"], "%d.%m.%Y")):
+            dates2.append(r["date"][:5])
+            c, t = 0, 0
+            for template, tickets in r.get("blocks", []):
+                cnt = len([x.strip() for x in tickets.split(",") if x.strip()]) if tickets else 0
+                if self.classify_block(template) == "created":
+                    c += cnt
+                elif self.classify_block(template) == "tested":
+                    t += cnt
+            created_list.append(c)
+            tested_list.append(t)
+        
+        x = range(len(dates2))
+        ax2.bar([i-0.2 for i in x], created_list, 0.4, label='Создано', color='#ff6b6b')
+        ax2.bar([i+0.2 for i in x], tested_list, 0.4, label='Протестировано', color='#4ecdc4')
+        ax2.set_xticks(x)
+        ax2.set_xticklabels(dates2, rotation=45, ha='right', fontsize=8)
+        ax2.set_title("Тикеты по дням", fontsize=11)
+        ax2.legend()
+        
+        # === График 3: Продуктивность (часы × тикеты) ===
+        ax3 = self.axes[1, 0]
+        productivity = []
+        for r in sorted(filtered, key=lambda x: datetime.strptime(x["date"], "%d.%m.%Y")):
+            ticket_count = 0
+            for _, tickets in r.get("blocks", []):
+                ticket_count += len([t.strip() for t in tickets.split(",") if t.strip()]) if tickets else 0
+            productivity.append(r.get("hours", 0) * (ticket_count + 1))  # индекс продуктивности
+        
+        ax3.plot(range(len(dates)), productivity, 'o-', color='#ffd93d', linewidth=2, markersize=6)
+        ax3.fill_between(range(len(dates)), productivity, alpha=0.3, color='#ffd93d')
+        ax3.set_xticks(range(len(dates)))
+        ax3.set_xticklabels(dates, rotation=45, ha='right', fontsize=8)
+        ax3.set_title("Индекс продуктивности (часы × тикеты)", fontsize=11)
+        ax3.set_ylabel("Индекс")
+        
+        # === График 4: Распределение типов задач ===
+        ax4 = self.axes[1, 1]
+        type_counts = {"Тестирование": 0, "Создание тикетов": 0, "Другое": 0}
+        for r in filtered:
+            for template, _ in r.get("blocks", []):
+                cls = self.classify_block(template)
+                if cls == "tested":
+                    type_counts["Тестирование"] += 1
+                elif cls == "created":
+                    type_counts["Создание тикетов"] += 1
+                else:
+                    type_counts["Другое"] += 1
+        
+        colors_pie = ['#4ecdc4', '#ff6b6b', '#95a5a6']
+        ax4.pie(type_counts.values(), labels=type_counts.keys(), 
+                colors=colors_pie, autopct='%1.1f%%', startangle=90,
+                textprops={'color': 'white'})
+        ax4.set_title("Распределение задач", fontsize=11)
+        
+        self.fig.tight_layout()
+        self.canvas.draw()
+
 # ─── Окно редактирования ───
 class EditWindow:
     def __init__(self, parent, record, on_save, original_date=None):
@@ -935,6 +1206,11 @@ settings_menu = tk.Menu(menubar, tearoff=0, bg="#2d2d2d", fg="white",
                         font=("Segoe UI", 10))
 menubar.add_cascade(label="⚙ Настройки", menu=settings_menu)
 settings_menu.add_command(label="📝 Управление шаблонами...", command=open_templates)
+analytics_menu = tk.Menu(menubar, tearoff=0, bg="#2d2d2d", fg="white",
+                         activebackground="#0078d4", activeforeground="white",
+                         font=("Segoe UI", 10))
+menubar.add_cascade(label="📊 Аналитика", menu=analytics_menu)
+analytics_menu.add_command(label="📈 Открыть аналитику", command=lambda: AnalyticsWindow(root))
 
 help_menu = tk.Menu(menubar, tearoff=0, bg="#2d2d2d", fg="white",
                     activebackground="#0078d4", activeforeground="white",
