@@ -725,16 +725,17 @@ class AnalyticsWindow:
     def __init__(self, parent):
         self.top = tk.Toplevel(parent)
         self.top.title("📊 Аналитика работы")
-        self.top.geometry("1100x750")
+        self.top.geometry("1400x900")  # Увеличил размер
         self.top.resizable(False, False)
         self.top.configure(bg="#1e1e1e")
         self.top.transient(parent)
         
-        # Верхняя панель с фильтром
+        # Верхняя панель
         top_frame = ttk.Frame(self.top)
         top_frame.pack(fill="x", padx=15, pady=10)
         
-        ttk.Label(top_frame, text="Период:").pack(side="left", padx=(0, 5))
+        ttk.Label(top_frame, text="Период:", foreground="white",
+                  font=("Segoe UI", 10)).pack(side="left", padx=(0, 5))
         
         self.combo_period = ttk.Combobox(top_frame, 
             values=["Последние 7 дней", "Последние 30 дней", "Текущий месяц", "Всё время"],
@@ -745,23 +746,34 @@ class AnalyticsWindow:
         
         ttk.Button(top_frame, text="🔄 Обновить", command=self.draw).pack(side="left", padx=10)
         
-        # Статистика сверху
+        # Статистика
         stats_frame = ttk.Frame(self.top)
         stats_frame.pack(fill="x", padx=15, pady=5)
         
         self.stat_labels = {}
-        for i, key in enumerate(["Всего часов", "Рабочих дней", "Среднее часов/день", 
-                                  "Создано тикетов", "Протестировано тикетов"]):
-            lbl = ttk.Label(stats_frame, text=f"{key}: 0", font=("Segoe UI", 10, "bold"))
-            lbl.pack(side="left", padx=15)
+        stats = [
+            ("Всего часов", "white"),
+            ("Рабочих дней", "white"),
+            ("Среднее ч/день", "#ffd93d"),
+            ("Создано тикетов", "#ff6b6b"),
+            ("Протестировано", "#4ecdc4"),
+            ("Тикетов/день", "#00ff88"),
+        ]
+        for key, color in stats:
+            lbl = ttk.Label(stats_frame, text=f"{key}: 0", 
+                          font=("Segoe UI", 10, "bold"), foreground=color)
+            lbl.pack(side="left", padx=12)
             self.stat_labels[key] = lbl
         
-        # Область для графиков
-        self.fig, self.axes = plt.subplots(2, 2, figsize=(12, 8))
+        # Графики 2x3 с увеличенным размером
+        self.fig, self.axes = plt.subplots(2, 3, figsize=(18, 11))
         self.fig.patch.set_facecolor('#1e1e1e')
+        self.fig.suptitle("Аналитика работы", color='white', fontsize=16, fontweight='bold', y=0.98)
+        
+        # Настройка всех осей
         for ax in self.axes.flat:
             ax.set_facecolor('#2d2d2d')
-            ax.tick_params(colors='white')
+            ax.tick_params(colors='white', labelsize=9)
             ax.xaxis.label.set_color('white')
             ax.yaxis.label.set_color('white')
             ax.title.set_color('white')
@@ -772,6 +784,24 @@ class AnalyticsWindow:
         self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=15, pady=10)
         
         self.draw()
+    
+    def count_tickets(self, tickets_str):
+        if not tickets_str:
+            return 0
+        tickets = [t.strip() for t in tickets_str.replace(" ", "").split(",") if t.strip().isdigit()]
+        return len(tickets)
+    
+    def classify_block(self, template):
+        if not template:
+            return "other"
+        t = template.lower()
+        if any(w in t for w in ["заведен", "создан", "найден критический баг"]):
+            return "created"
+        if any(w in t for w in ["протестирован", "тестирован", "проверк", 
+                                 "тестирование", "прошел", "пройден",
+                                 "закрыла тестирование", "завершено тестирование"]):
+            return "tested"
+        return "other"
     
     def get_filtered_reports(self):
         period = self.combo_period.get()
@@ -794,17 +824,7 @@ class AnalyticsWindow:
                     filtered.append(r)
             except:
                 pass
-        
-        return filtered
-    
-    def classify_block(self, template):
-        """Определяет тип блока: created, tested, other"""
-        t = template.lower()
-        if any(w in t for w in ["заведен", "создан", "найден критический"]):
-            return "created"
-        if any(w in t for w in ["протестирован", "тестирование", "проверк"]):
-            return "tested"
-        return "other"
+        return sorted(filtered, key=lambda x: datetime.strptime(x["date"], "%d.%m.%Y"))
     
     def draw(self):
         filtered = self.get_filtered_reports()
@@ -819,105 +839,231 @@ class AnalyticsWindow:
         for r in filtered:
             blocks = r.get("blocks", [])
             for template, tickets in blocks:
-                ticket_count = len([t.strip() for t in tickets.split(",") if t.strip()]) if tickets else 0
-                if self.classify_block(template) == "created":
-                    created_tickets += ticket_count
-                elif self.classify_block(template) == "tested":
-                    tested_tickets += ticket_count
+                cnt = self.count_tickets(tickets)
+                cls = self.classify_block(template)
+                if cls == "created":
+                    created_tickets += cnt
+                elif cls == "tested":
+                    tested_tickets += cnt
+        
+        productivity_index = round((created_tickets + tested_tickets) / max(work_days, 1), 1)
         
         self.stat_labels["Всего часов"].config(text=f"Всего часов: {total_hours}")
         self.stat_labels["Рабочих дней"].config(text=f"Рабочих дней: {work_days}")
-        self.stat_labels["Среднее часов/день"].config(text=f"Среднее: {avg_hours}ч")
+        self.stat_labels["Среднее ч/день"].config(text=f"Среднее: {avg_hours}ч")
         self.stat_labels["Создано тикетов"].config(text=f"Создано: {created_tickets}")
-        self.stat_labels["Протестировано тикетов"].config(text=f"Протестировано: {tested_tickets}")
+        self.stat_labels["Протестировано"].config(text=f"Протестировано: {tested_tickets}")
+        self.stat_labels["Тикетов/день"].config(text=f"Тикетов/день: {productivity_index}")
         
-        # Очистка графиков
+        # Очистка всех осей
         for ax in self.axes.flat:
             ax.clear()
         
         if not filtered:
-            self.fig.suptitle("Нет данных", color='white', fontsize=14)
+            self.fig.suptitle("Нет данных за выбранный период", color='white', fontsize=14)
+            for ax in self.axes.flat:
+                ax.text(0.5, 0.5, "Нет данных", ha='center', va='center', 
+                    color='white', fontsize=12, transform=ax.transAxes)
+                ax.set_xticks([])
+                ax.set_yticks([])
             self.canvas.draw()
             return
         
-        # === График 1: Часы по дням ===
-        ax1 = self.axes[0, 0]
-        dates = []
-        hours_list = []
-        for r in sorted(filtered, key=lambda x: datetime.strptime(x["date"], "%d.%m.%Y")):
-            dates.append(r["date"][:5])  # ДД.ММ
-            hours_list.append(r.get("hours", 0))
+        dates_short = [r["date"][:5] for r in filtered]
+        x_range = range(len(dates_short))
         
-        colors = ['#0078d4' if h >= 8 else '#ffaa00' if h >= 6 else '#ff4444' for h in hours_list]
-        ax1.bar(range(len(dates)), hours_list, color=colors, edgecolor='#555555')
-        ax1.set_xticks(range(len(dates)))
-        ax1.set_xticklabels(dates, rotation=45, ha='right', fontsize=8)
-        ax1.set_title("Часы по дням", fontsize=11)
-        ax1.set_ylabel("Часы")
-        ax1.axhline(y=8, color='#00ff88', linestyle='--', alpha=0.5, label='Норма 8ч')
-        ax1.legend()
+        # === График 1: Часы по дням ===
+        try:
+            ax1 = self.axes[0, 0]
+            hours_list = [r.get("hours", 0) for r in filtered]
+            colors = ['#00ff88' if h >= 8 else '#ffd93d' if h >= 6 else '#ff6b6b' for h in hours_list]
+            ax1.bar(x_range, hours_list, color=colors, edgecolor='#555555', alpha=0.8)
+            ax1.set_xticks(x_range)
+            ax1.set_xticklabels(dates_short, rotation=45, ha='right', color='white', fontsize=8)
+            ax1.set_title("Часы по дням", fontsize=11, pad=10, color='white')
+            ax1.set_ylabel("Часы", color='white')
+            ax1.axhline(y=8, color='#00ff88', linestyle='--', alpha=0.7, linewidth=2, label='Норма 8ч')
+            ax1.legend(loc='upper right', facecolor='#2d2d2d', edgecolor='#555555', 
+                    labelcolor='white', fontsize=8)
+            ax1.set_ylim(0, max(hours_list) * 1.3 if hours_list else 10)
+        except Exception as e:
+            print(f"Ошибка графика 1: {e}")
         
         # === График 2: Тикеты по дням ===
-        ax2 = self.axes[0, 1]
-        dates2 = []
-        created_list = []
-        tested_list = []
-        for r in sorted(filtered, key=lambda x: datetime.strptime(x["date"], "%d.%m.%Y")):
-            dates2.append(r["date"][:5])
-            c, t = 0, 0
-            for template, tickets in r.get("blocks", []):
-                cnt = len([x.strip() for x in tickets.split(",") if x.strip()]) if tickets else 0
-                if self.classify_block(template) == "created":
-                    c += cnt
-                elif self.classify_block(template) == "tested":
-                    t += cnt
-            created_list.append(c)
-            tested_list.append(t)
+        try:
+            ax2 = self.axes[0, 1]
+            created_list = []
+            tested_list = []
+            for r in filtered:
+                c, t = 0, 0
+                for template, tickets in r.get("blocks", []):
+                    cnt = self.count_tickets(tickets)
+                    cls = self.classify_block(template)
+                    if cls == "created":
+                        c += cnt
+                    elif cls == "tested":
+                        t += cnt
+                created_list.append(c)
+                tested_list.append(t)
+            
+            width = 0.35
+            ax2.bar([i - width/2 for i in x_range], created_list, width, 
+                    label='Создано', color='#ff6b6b', alpha=0.8)
+            ax2.bar([i + width/2 for i in x_range], tested_list, width, 
+                    label='Протестировано', color='#4ecdc4', alpha=0.8)
+            ax2.set_xticks(x_range)
+            ax2.set_xticklabels(dates_short, rotation=45, ha='right', color='white', fontsize=8)
+            ax2.set_title("Тикеты по дням", fontsize=11, pad=10, color='white')
+            ax2.legend(facecolor='#2d2d2d', edgecolor='#555555', labelcolor='white', fontsize=8)
+        except Exception as e:
+            print(f"Ошибка графика 2: {e}")
         
-        x = range(len(dates2))
-        ax2.bar([i-0.2 for i in x], created_list, 0.4, label='Создано', color='#ff6b6b')
-        ax2.bar([i+0.2 for i in x], tested_list, 0.4, label='Протестировано', color='#4ecdc4')
-        ax2.set_xticks(x)
-        ax2.set_xticklabels(dates2, rotation=45, ha='right', fontsize=8)
-        ax2.set_title("Тикеты по дням", fontsize=11)
-        ax2.legend()
+        # === График 3: Кумулятивная динамика ===
+        try:
+            ax3 = self.axes[0, 2]
+            cum_hours = []
+            cum_tickets = []
+            total_h = 0
+            total_t = 0
+            for r in filtered:
+                total_h += r.get("hours", 0)
+                total_t += sum(self.count_tickets(t) for _, t in r.get("blocks", []))
+                cum_hours.append(total_h)
+                cum_tickets.append(total_t)
+            
+            ax3.plot(x_range, cum_hours, 'o-', color='#ffd93d', linewidth=2, markersize=5, label='Часы')
+            ax3.set_xticks(x_range)
+            ax3.set_xticklabels(dates_short, rotation=45, ha='right', color='white', fontsize=8)
+            ax3.set_title("Кумулятивная динамика", fontsize=11, pad=10, color='white')
+            ax3.set_ylabel("Часы", color='#ffd93d', fontsize=10)
+            ax3.legend(loc='upper left', facecolor='#2d2d2d', edgecolor='#555555', labelcolor='white', fontsize=8)
+            
+            ax3_twin = ax3.twinx()
+            ax3_twin.plot(x_range, cum_tickets, 's-', color='#ff6b6b', linewidth=2, markersize=5, label='Тикеты')
+            ax3_twin.set_ylabel("Тикеты", color='#ff6b6b', fontsize=10)
+            ax3_twin.tick_params(colors='#ff6b6b')
+            ax3_twin.legend(loc='upper right', facecolor='#2d2d2d', edgecolor='#555555', labelcolor='white', fontsize=8)
+        except Exception as e:
+            print(f"Ошибка графика 3: {e}")
         
-        # === График 3: Продуктивность (часы × тикеты) ===
-        ax3 = self.axes[1, 0]
-        productivity = []
-        for r in sorted(filtered, key=lambda x: datetime.strptime(x["date"], "%d.%m.%Y")):
-            ticket_count = 0
-            for _, tickets in r.get("blocks", []):
-                ticket_count += len([t.strip() for t in tickets.split(",") if t.strip()]) if tickets else 0
-            productivity.append(r.get("hours", 0) * (ticket_count + 1))  # индекс продуктивности
+        # === График 4: Распределение задач ===
+        try:
+            ax4 = self.axes[1, 0]
+            type_counts = {"Тестирование": 0, "Создание тикетов": 0, "Другое": 0}
+            for r in filtered:
+                for template, _ in r.get("blocks", []):
+                    cls = self.classify_block(template)
+                    if cls == "tested":
+                        type_counts["Тестирование"] += 1
+                    elif cls == "created":
+                        type_counts["Создание тикетов"] += 1
+                    else:
+                        type_counts["Другое"] += 1
+            
+            labels_pie = [k for k, v in type_counts.items() if v > 0]
+            values_pie = [v for v in type_counts.values() if v > 0]
+            colors_pie = ['#4ecdc4', '#ff6b6b', '#95a5a6'][:len(values_pie)]
+            
+            if values_pie:
+                # ВАЖНО: pie возвращает 3 значения!
+                wedges, texts, autotexts = ax4.pie(
+                    values_pie, 
+                    colors=colors_pie, 
+                    autopct='%1.1f%%', 
+                    startangle=90,
+                    pctdistance=0.75,
+                    wedgeprops={'edgecolor': '#1e1e1e', 'linewidth': 2}
+                )
+                for autotext in autotexts:
+                    autotext.set_color('white')
+                    autotext.set_fontweight('bold')
+                    autotext.set_fontsize(10)
+                
+                ax4.legend(labels_pie, loc='center left', bbox_to_anchor=(1, 0.5),
+                        facecolor='#2d2d2d', edgecolor='#555555', labelcolor='white', fontsize=9)
+            else:
+                ax4.text(0.5, 0.5, "Нет данных", ha='center', va='center', 
+                        color='white', fontsize=11, transform=ax4.transAxes)
+                ax4.set_xticks([])
+                ax4.set_yticks([])
+            
+            ax4.set_title("Распределение задач", fontsize=11, pad=10, color='white')
+        except Exception as e:
+            print(f"Ошибка графика 4: {e}")
         
-        ax3.plot(range(len(dates)), productivity, 'o-', color='#ffd93d', linewidth=2, markersize=6)
-        ax3.fill_between(range(len(dates)), productivity, alpha=0.3, color='#ffd93d')
-        ax3.set_xticks(range(len(dates)))
-        ax3.set_xticklabels(dates, rotation=45, ha='right', fontsize=8)
-        ax3.set_title("Индекс продуктивности (часы × тикеты)", fontsize=11)
-        ax3.set_ylabel("Индекс")
+        # === График 5: Топ продуктивных дней ===
+        try:
+            ax5 = self.axes[1, 1]
+            day_productivity = []
+            for r in filtered:
+                ticket_count = sum(self.count_tickets(t) for _, t in r.get("blocks", []))
+                score = r.get("hours", 0) * max(ticket_count, 1)
+                day_productivity.append((r["date"][:5], score, r["date"]))
+            
+            day_productivity.sort(key=lambda x: x[1], reverse=True)
+            top5 = day_productivity[:5] if len(day_productivity) >= 5 else day_productivity
+            
+            if top5:
+                labels_top = [d[0] for d in top5]
+                values_top = [d[1] for d in top5]
+                ax5.barh(range(len(labels_top)), values_top, color='#ffd93d', alpha=0.8, edgecolor='#555555')
+                ax5.set_yticks(range(len(labels_top)))
+                ax5.set_yticklabels(labels_top, color='white', fontsize=9)
+                ax5.invert_yaxis()
+                ax5.set_title("Топ продуктивных дней", fontsize=11, pad=10, color='white')
+                ax5.set_xlabel("Индекс (часы × тикеты)", color='white')
+                
+                for i, v in enumerate(values_top):
+                    ax5.text(v + 0.5, i, str(int(v)), color='white', va='center', fontsize=8)
+            else:
+                ax5.text(0.5, 0.5, "Нет данных", ha='center', va='center', 
+                        color='white', fontsize=11, transform=ax5.transAxes)
+                ax5.set_xticks([])
+                ax5.set_yticks([])
+        except Exception as e:
+            print(f"Ошибка графика 5: {e}")
         
-        # === График 4: Распределение типов задач ===
-        ax4 = self.axes[1, 1]
-        type_counts = {"Тестирование": 0, "Создание тикетов": 0, "Другое": 0}
-        for r in filtered:
-            for template, _ in r.get("blocks", []):
-                cls = self.classify_block(template)
-                if cls == "tested":
-                    type_counts["Тестирование"] += 1
-                elif cls == "created":
-                    type_counts["Создание тикетов"] += 1
+        # === График 6: Средние часы по дням недели ===
+        try:
+            ax6 = self.axes[1, 2]
+            day_names = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+            day_hours = {i: [] for i in range(7)}
+            
+            for r in filtered:
+                try:
+                    d = datetime.strptime(r["date"], "%d.%m.%Y")
+                    weekday = d.weekday()
+                    day_hours[weekday].append(r.get("hours", 0))
+                except:
+                    pass
+            
+            avg_by_day = []
+            for i in range(7):
+                if day_hours[i]:
+                    avg_by_day.append(sum(day_hours[i]) / len(day_hours[i]))
                 else:
-                    type_counts["Другое"] += 1
+                    avg_by_day.append(0)
+            
+            max_avg = max(avg_by_day) if avg_by_day else 1
+            colors_heat = ['#00ff88' if h >= 8 else '#ffd93d' if h >= 6 else '#ff6b6b' for h in avg_by_day]
+            
+            ax6.bar(range(7), avg_by_day, color=colors_heat, alpha=0.8, edgecolor='#555555')
+            ax6.set_xticks(range(7))
+            ax6.set_xticklabels(day_names, color='white', fontsize=10)
+            ax6.set_title("По дням недели", fontsize=11, pad=10, color='white')
+            ax6.set_ylabel("Среднее часов", color='white')
+            ax6.axhline(y=8, color='#00ff88', linestyle='--', alpha=0.5)
+            ax6.set_ylim(0, max_avg * 1.3 if max_avg > 0 else 10)
+            
+            for i, v in enumerate(avg_by_day):
+                if v > 0:
+                    ax6.text(i, v + max_avg * 0.05, f"{v:.1f}", ha='center', color='white', fontsize=8)
+        except Exception as e:
+            print(f"Ошибка графика 6: {e}")
         
-        colors_pie = ['#4ecdc4', '#ff6b6b', '#95a5a6']
-        ax4.pie(type_counts.values(), labels=type_counts.keys(), 
-                colors=colors_pie, autopct='%1.1f%%', startangle=90,
-                textprops={'color': 'white'})
-        ax4.set_title("Распределение задач", fontsize=11)
-        
-        self.fig.tight_layout()
+        # Мягкое расположение без жёсткого tight_layout
+        self.fig.subplots_adjust(left=0.08, right=0.95, top=0.92, bottom=0.15, 
+                                hspace=0.4, wspace=0.3)
         self.canvas.draw()
 
 # ─── Окно редактирования ───
