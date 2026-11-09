@@ -1066,6 +1066,250 @@ class AnalyticsWindow:
                                 hspace=0.4, wspace=0.3)
         self.canvas.draw()
 
+# ─── Калькулятор зарплаты ───
+class SalaryCalculator:
+    def __init__(self, parent):
+        self.top = tk.Toplevel(parent)
+        self.top.title("💰 Калькулятор зарплаты")
+        self.top.geometry("500x700")
+        self.top.resizable(False, False)
+        self.top.configure(bg="#1e1e1e")
+        self.top.transient(parent)
+        
+        frame = ttk.LabelFrame(self.top, text="Расчёт зарплаты", padding=20)
+        frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # Оклад
+        ttk.Label(frame, text="Оклад за месяц (руб):", font=("Segoe UI", 11)).pack(anchor="w", pady=(0, 5))
+        self.entry_salary = ttk.Entry(frame, font=("Segoe UI", 11), width=20)
+        self.entry_salary.pack(fill="x", pady=(0, 15))
+        self.entry_salary.insert(0, "100000")
+        
+        # Норма часов в месяце
+        ttk.Label(frame, text="Норма часов в месяце:", font=("Segoe UI", 11)).pack(anchor="w", pady=(0, 5))
+        self.entry_norm = ttk.Entry(frame, font=("Segoe UI", 11), width=20)
+        self.entry_norm.pack(fill="x", pady=(0, 15))
+        self.entry_norm.insert(0, "160")  # Стандартная норма
+        
+        # Период
+        ttk.Label(frame, text="Период расчёта:", font=("Segoe UI", 11)).pack(anchor="w", pady=(0, 5))
+        self.combo_period = ttk.Combobox(frame, 
+            values=["Текущий месяц", "Последние 30 дней", "Всё время", "Произвольный диапазон"],
+            state="readonly", font=("Segoe UI", 11))
+        self.combo_period.pack(fill="x", pady=(0, 15))
+        self.combo_period.set("Текущий месяц")
+        self.combo_period.bind("<<ComboboxSelected>>", lambda e: self.toggle_date_range())
+        
+        # Диапазон дат (скрыт по умолчанию)
+        self.date_range_frame = ttk.Frame(frame)
+        self.date_range_frame.pack(fill="x", pady=(0, 15))
+        self.date_range_frame.pack_forget()
+        
+        ttk.Label(self.date_range_frame, text="С:").pack(side="left", padx=(0, 5))
+        self.entry_date_from = ttk.Entry(self.date_range_frame, width=12)
+        self.entry_date_from.pack(side="left", padx=(0, 10))
+        
+        ttk.Label(self.date_range_frame, text="По:").pack(side="left", padx=(0, 5))
+        self.entry_date_to = ttk.Entry(self.date_range_frame, width=12)
+        self.entry_date_to.pack(side="left")
+        
+        # Результаты
+        result_frame = ttk.LabelFrame(frame, text="Результат", padding=15)
+        result_frame.pack(fill="x", pady=15)
+        
+        self.result_labels = {}
+        results = [
+            ("Стоимость часа:", "white"),
+            ("Отработано часов:", "white"),
+            ("Норма часов:", "white"),
+            ("Переработка:", "#ffd93d"),
+            ("Начислено:", "#00ff88"),
+            ("НДФЛ (13%):", "#ff6b6b"),
+            ("На руки:", "#00ff88"),
+        ]
+        
+        for label, color in results:
+            row = ttk.Frame(result_frame)
+            row.pack(fill="x", pady=3)
+            ttk.Label(row, text=label, font=("Segoe UI", 10)).pack(side="left")
+            lbl = ttk.Label(row, text="0", font=("Segoe UI", 10, "bold"), foreground=color)
+            lbl.pack(side="right")
+            self.result_labels[label] = lbl
+        
+        # Кнопка расчёта
+        ttk.Button(frame, text="🧮 Рассчитать", command=self.calculate, 
+                  style="Accent.TButton").pack(fill="x", pady=15)
+    
+    def toggle_date_range(self):
+        if self.combo_period.get() == "Произвольный диапазон":
+            self.date_range_frame.pack(fill="x", pady=(0, 15))
+        else:
+            self.date_range_frame.pack_forget()
+    
+    def get_filtered_hours(self):
+        period = self.combo_period.get()
+        now = datetime.now()
+        
+        if period == "Текущий месяц":
+            cutoff = now.replace(day=1, hour=0, minute=0, second=0)
+        elif period == "Последние 30 дней":
+            cutoff = (now - timedelta(days=30)).replace(hour=0, minute=0, second=0)
+        elif period == "Всё время":
+            cutoff = datetime(2000, 1, 1)
+        else:
+            try:
+                d_from = datetime.strptime(self.entry_date_from.get(), "%d.%m.%Y")
+                d_to = datetime.strptime(self.entry_date_to.get(), "%d.%m.%Y")
+                cutoff = d_from
+                self.date_to = d_to
+            except:
+                return 0
+        
+        total_hours = 0
+        for r in reports:
+            try:
+                d = datetime.strptime(r["date"], "%d.%m.%Y")
+                if period == "Произвольный диапазон":
+                    if d_from <= d <= d_to:
+                        total_hours += r.get("hours", 0)
+                elif d >= cutoff:
+                    total_hours += r.get("hours", 0)
+            except:
+                pass
+        
+        return total_hours
+    
+    def calculate(self):
+        try:
+            salary = float(self.entry_salary.get())
+            norm_hours = float(self.entry_norm.get())
+        except:
+            messagebox.showwarning("Внимание", "Введите корректные числа!")
+            return
+        
+        worked_hours = self.get_filtered_hours()
+        hour_rate = salary / norm_hours if norm_hours > 0 else 0
+        overtime = max(0, worked_hours - norm_hours)
+        accrued = worked_hours * hour_rate
+        ndfl = accrued * 0.13
+        net_salary = accrued - ndfl
+        
+        self.result_labels["Стоимость часа:"].config(text=f"{hour_rate:.2f} руб")
+        self.result_labels["Отработано часов:"].config(text=f"{worked_hours:.1f} ч")
+        self.result_labels["Норма часов:"].config(text=f"{norm_hours:.0f} ч")
+        self.result_labels["Переработка:"].config(text=f"{overtime:.1f} ч")
+        self.result_labels["Начислено:"].config(text=f"{accrued:,.2f} руб")
+        self.result_labels["НДФЛ (13%):"].config(text=f"{ndfl:,.2f} руб")
+        self.result_labels["На руки:"].config(text=f"{net_salary:,.2f} руб")
+
+# ─── Калькулятор отпуска ───
+class VacationCalculator:
+    def __init__(self, parent):
+        self.top = tk.Toplevel(parent)
+        self.top.title("🏖️ Калькулятор отпуска")
+        self.top.geometry("500x650")
+        self.top.resizable(False, False)
+        self.top.configure(bg="#1e1e1e")
+        self.top.transient(parent)
+        
+        frame = ttk.LabelFrame(self.top, text="Расчёт отпускных", padding=20)
+        frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # Оклад
+        ttk.Label(frame, text="Оклад за месяц (руб):", font=("Segoe UI", 11)).pack(anchor="w", pady=(0, 5))
+        self.entry_salary = ttk.Entry(frame, font=("Segoe UI", 11), width=20)
+        self.entry_salary.pack(fill="x", pady=(0, 15))
+        self.entry_salary.insert(0, "100000")
+        
+        # Дни отпуска
+        ttk.Label(frame, text="Количество дней отпуска:", font=("Segoe UI", 11)).pack(anchor="w", pady=(0, 5))
+        self.entry_days = ttk.Entry(frame, font=("Segoe UI", 11), width=20)
+        self.entry_days.pack(fill="x", pady=(0, 15))
+        self.entry_days.insert(0, "14")
+        
+        # Расчётный период
+        ttk.Label(frame, text="Расчётный период (месяцев):", font=("Segoe UI", 11)).pack(anchor="w", pady=(0, 5))
+        self.entry_months = ttk.Entry(frame, font=("Segoe UI", 11), width=20)
+        self.entry_months.pack(fill="x", pady=(0, 15))
+        self.entry_months.insert(0, "12")
+        
+        # Среднее количество дней в месяце
+        ttk.Label(frame, text="Среднее кол-во дней в месяце:", font=("Segoe UI", 11)).pack(anchor="w", pady=(0, 5))
+        self.entry_avg_days = ttk.Entry(frame, font=("Segoe UI", 11), width=20)
+        self.entry_avg_days.pack(fill="x", pady=(0, 15))
+        self.entry_avg_days.insert(0, "29.3")  # По ТК РФ
+        
+        # Результаты
+        result_frame = ttk.LabelFrame(frame, text="Результат", padding=15)
+        result_frame.pack(fill="x", pady=15)
+        
+        self.result_labels = {}
+        results = [
+            ("Средний дневной заработок:", "white"),
+            ("Сумма отпускных:", "#00ff88"),
+            ("НДФЛ (13%):", "#ff6b6b"),
+            ("На руки:", "#00ff88"),
+            ("Остаток дней отпуска:", "#ffd93d"),
+        ]
+        
+        for label, color in results:
+            row = ttk.Frame(result_frame)
+            row.pack(fill="x", pady=3)
+            ttk.Label(row, text=label, font=("Segoe UI", 10)).pack(side="left")
+            lbl = ttk.Label(row, text="0", font=("Segoe UI", 10, "bold"), foreground=color)
+            lbl.pack(side="right")
+            self.result_labels[label] = lbl
+        
+        # Кнопка расчёта
+        ttk.Button(frame, text="🏖️ Рассчитать", command=self.calculate).pack(fill="x", pady=15)
+        
+        # Информация
+        info_frame = ttk.LabelFrame(frame, text="Справка", padding=10)
+        info_frame.pack(fill="x", pady=10)
+        
+        info_text = (
+            "📋 По ТК РФ:\n"
+            "• Стандартный отпуск — 28 дней в год\n"
+            "• Средний дневной заработок = Оклад / 29.3\n"
+            "• Отпускные = Средний дневной × Дни отпуска\n"
+            "• НДФЛ удерживается 13%\n\n"
+            "💡 Отпускные выплачиваются за 3 дня до начала отпуска"
+        )
+        ttk.Label(info_frame, text=info_text, font=("Segoe UI", 9), 
+                 foreground="#aaaaaa", justify="left").pack(anchor="w")
+    
+    def calculate(self):
+        try:
+            salary = float(self.entry_salary.get())
+            vacation_days = float(self.entry_days.get())
+            months = float(self.entry_months.get())
+            avg_days = float(self.entry_avg_days.get())
+        except:
+            messagebox.showwarning("Внимание", "Введите корректные числа!")
+            return
+        
+        # Средний дневной заработок
+        avg_daily = salary / avg_days if avg_days > 0 else 0
+        
+        # Сумма отпускных
+        vacation_pay = avg_daily * vacation_days
+        
+        # НДФЛ
+        ndfl = vacation_pay * 0.13
+        
+        # На руки
+        net_vacation = vacation_pay - ndfl
+        
+        # Остаток дней (28 дней в год - использованные)
+        days_per_year = 28
+        remaining_days = max(0, days_per_year - vacation_days)
+        
+        self.result_labels["Средний дневной заработок:"].config(text=f"{avg_daily:.2f} руб")
+        self.result_labels["Сумма отпускных:"].config(text=f"{vacation_pay:,.2f} руб")
+        self.result_labels["НДФЛ (13%):"].config(text=f"{ndfl:,.2f} руб")
+        self.result_labels["На руки:"].config(text=f"{net_vacation:,.2f} руб")
+        self.result_labels["Остаток дней отпуска:"].config(text=f"{remaining_days:.0f} дней")
+
 # ─── Окно редактирования ───
 class EditWindow:
     def __init__(self, parent, record, on_save, original_date=None):
@@ -1357,6 +1601,13 @@ analytics_menu = tk.Menu(menubar, tearoff=0, bg="#2d2d2d", fg="white",
                          font=("Segoe UI", 10))
 menubar.add_cascade(label="📊 Аналитика", menu=analytics_menu)
 analytics_menu.add_command(label="📈 Открыть аналитику", command=lambda: AnalyticsWindow(root))
+# Калькуляторы
+calc_menu = tk.Menu(menubar, tearoff=0, bg="#2d2d2d", fg="white",
+                    activebackground="#0078d4", activeforeground="white",
+                    font=("Segoe UI", 10))
+menubar.add_cascade(label="🧮 Калькуляторы", menu=calc_menu)
+calc_menu.add_command(label="💰 Калькулятор зарплаты", command=lambda: SalaryCalculator(root))
+calc_menu.add_command(label="🏖️ Калькулятор отпуска", command=lambda: VacationCalculator(root))
 
 help_menu = tk.Menu(menubar, tearoff=0, bg="#2d2d2d", fg="white",
                     activebackground="#0078d4", activeforeground="white",
