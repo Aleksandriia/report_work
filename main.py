@@ -4,6 +4,9 @@ from datetime import datetime
 import matplotlib
 matplotlib.use('TkAgg')
 
+matplotlib.rcParams['font.family'] = 'sans-serif'
+matplotlib.rcParams['font.sans-serif'] = ['Arial', 'Helvetica']
+
 from config import IS_MAC, FONT, TEMPLATES
 from logic import (
     load_data, save_data, load_templates, save_templates, 

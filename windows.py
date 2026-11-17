@@ -2,8 +2,6 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from datetime import datetime, timedelta
 import os
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 from config import FONT, IS_MAC, TEMPLATES
 from logic import (
@@ -297,6 +295,9 @@ class ImportWindow:
 # ─── Окно аналитики ───
 class AnalyticsWindow:
     def __init__(self, parent, reports):
+        import matplotlib.pyplot as plt
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+        
         self.reports = reports
         self.top = tk.Toplevel(parent)
         self.top.title("📊 Аналитика работы")
