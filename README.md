@@ -15,7 +15,7 @@
 ## Установка и запуск
 
 ### Вариант 1. Готовое приложение (без Python)
-Скачайте готовую сборку из раздела [Releases]([https://github.com/](https://github.com/Aleksandriia/report_work/commits/releases):
+Скачайте готовую сборку из раздела [Releases](https://github.com/Aleksandriia/report_work/commits/releases):
 - Для **macOS**: `DailyReport.app`
 - Для **Windows**: `DailyReport.exe`
 
