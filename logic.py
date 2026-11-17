@@ -237,3 +237,16 @@ def show_merge_dialog(parent, date_str, existing_hours, new_hours, total_hours):
     
     dialog.wait_window()
     return result["action"]
+
+# ─── Настройки приложения ───
+SETTINGS_FILE = "settings.json"
+
+def load_settings():
+    if os.path.exists(SETTINGS_FILE):
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {"daily_reminder_enabled": False, "daily_reminder_time": "18:30"}
+
+def save_settings(settings):
+    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+        json.dump(settings, f, ensure_ascii=False, indent=2)

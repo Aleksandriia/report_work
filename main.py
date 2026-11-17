@@ -8,13 +8,14 @@ from config import IS_MAC, FONT, TEMPLATES
 from logic import (
     load_data, save_data, load_templates, save_templates, 
     calc_hours, format_hours, build_comment_from_blocks, 
-    find_record_by_date, sort_reports, show_merge_dialog
+    find_record_by_date, sort_reports, show_merge_dialog,
+    load_settings, save_settings
 )
 from widgets import CalendarPopup, TaskBlocksFrame
 from windows import (
     TemplatesWindow, ImportWindow, AnalyticsWindow, 
     SalaryCalculator, VacationCalculator, PomodoroWindow, 
-    ReminderWindow, EditWindow
+    ReminderWindow, EditWindow, DailyReminderSettings
 )
 
 # ─── Глобальные переменные приложения ───
@@ -209,6 +210,38 @@ def export_range():
 
     ttk.Button(win, text="📄 Экспортировать", command=do_export).pack(pady=20)
 
+last_reminder_date = None
+
+# --- Фоновая проверка. Напоминание ---
+def check_daily_reminder():
+    """Фоновая проверка: не пора ли напомнить о заполнении отчета"""
+    global last_reminder_date
+    
+    settings = load_settings()
+    if not settings.get("daily_reminder_enabled"):
+        root.after(60000, check_daily_reminder) # Проверить через минуту
+        return
+
+    now = datetime.now()
+    target_time = settings.get("daily_reminder_time", "18:30")
+    current_time_str = now.strftime("%H:%M")
+
+    # Если время совпало и мы еще не напоминали сегодня
+    if current_time_str == target_time and last_reminder_date != now.strftime("%d.%m.%Y"):
+        last_reminder_date = now.strftime("%d.%m.%Y")
+        
+        # Проверяем, есть ли запись за сегодня
+        today_str = now.strftime("%d.%m.%Y")
+        has_record = any(r["date"] == today_str for r in reports)
+        
+        if not has_record:
+            root.bell()
+            messagebox.showwarning("⏰ Напоминание", 
+                                   f"Привет! Уже {target_time}, а отчета за сегодня ({today_str}) еще нет.\n\nПора записать свои задачи!")
+
+    # Проверяем каждую минуту
+    root.after(60000, check_daily_reminder)
+
 # ═══════════════════════════════════════════════════════════
 # ПОСТРОЕНИЕ ИНТЕРФЕЙСА
 # ═══════════════════════════════════════════════════════════
@@ -246,6 +279,10 @@ def build_menu():
     tools_menu.add_separator()
     tools_menu.add_command(label="⏱ Помодоро (Таймер)", command=lambda: PomodoroWindow(root))
     tools_menu.add_command(label="🔔 Создать напоминание", command=lambda: ReminderWindow(root))
+
+    tools_menu.add_separator()
+    tools_menu.add_command(label="⏰ Настройка ежедневного напоминания", 
+                           command=lambda: DailyReminderSettings(root, on_save=lambda: messagebox.showinfo("Готово", "Настройки напоминания сохранены!")))
 
     help_menu = tk.Menu(menubar, tearoff=0)
     menubar.add_cascade(label="❓ Справка", menu=help_menu)
@@ -348,6 +385,9 @@ def main():
 
     refresh_list()
     root.update_idletasks(); root.update()
+    # Запускаем фоновую проверку напоминаний
+    root.after(1000, check_daily_reminder)
+    
     root.mainloop()
 
 if __name__ == "__main__":

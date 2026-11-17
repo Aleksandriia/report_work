@@ -903,3 +903,48 @@ class EditWindow:
         
         ttk.Button(btn_frame, text="💾 Сохранить", command=save).pack(side="left", padx=5)
         ttk.Button(btn_frame, text="❌ Отмена", command=self.top.destroy).pack(side="left", padx=5)
+
+# ─── Окно настройки ежедневного напоминания ───
+class DailyReminderSettings:
+    def __init__(self, parent, on_save):
+        self.top = tk.Toplevel(parent)
+        self.top.title("⏰ Ежедневное напоминание")
+        self.top.geometry("350x200")
+        self.top.resizable(False, False)
+        if IS_MAC:
+            self.top.update_idletasks()
+            self.top.lift()
+            self.top.focus_force()
+        self.top.transient(parent)
+        self.top.grab_set()
+        
+        from logic import load_settings
+        settings = load_settings()
+
+        self.var_enabled = tk.BooleanVar(value=settings.get("daily_reminder_enabled", False))
+        ttk.Checkbutton(self.top, text="Включить ежедневное напоминание", 
+                        variable=self.var_enabled).pack(pady=(15, 10))
+
+        ttk.Label(self.top, text="Время напоминания (ЧЧ:ММ):").pack()
+        self.entry_time = ttk.Entry(self.top, width=10)
+        self.entry_time.pack(pady=5)
+        self.entry_time.insert(0, settings.get("daily_reminder_time", "18:30"))
+
+        def save():
+            time_str = self.entry_time.get().strip()
+            try:
+                datetime.strptime(time_str, "%H:%M")
+            except:
+                messagebox.showerror("Ошибка", "Введите время в формате ЧЧ:ММ (например, 18:30)", parent=self.top)
+                return
+
+            settings["daily_reminder_enabled"] = self.var_enabled.get()
+            settings["daily_reminder_time"] = time_str
+            
+            from logic import save_settings
+            save_settings(settings)
+            
+            self.top.destroy()
+            on_save()
+
+        ttk.Button(self.top, text="💾 Сохранить", command=save).pack(pady=15)
